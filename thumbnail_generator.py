@@ -1,25 +1,15 @@
+#"streamlit run thumbnail_generator_v2.py"これで試せる。
+
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
+from streamlit_cropper import st_cropper
 from io import BytesIO
 import os
 import requests
 
-st.set_page_config(layout="centered")
-st.title("留学サムネイル画像ジェネレーター")
-
-# 入力
-portrait = st.file_uploader("縦画像（人物）をアップロード", type=["jpg", "jpeg", "png"])
-landscape = st.file_uploader("横画像（背景）をアップロード", type=["jpg", "jpeg", "png"])
-name = st.text_input("名前")
-location = st.text_input("留学先（国・都市）")
-university = st.text_input("留学先大学")
-period = st.text_input("留学期間")
-affiliation = st.text_input("所属（出発時）")
-
 # フォント準備
 FONT_PATH = "NotoSansCJKjp-Regular.otf"
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"
-
 if not os.path.exists(FONT_PATH):
     try:
         r = requests.get(FONT_URL)
@@ -28,63 +18,100 @@ if not os.path.exists(FONT_PATH):
     except:
         st.warning("フォントのダウンロードに失敗しました。")
 
-if portrait and landscape and name and location and university and period and affiliation:
+# Streamlit設定
+st.set_page_config(layout="centered")
+st.title("留学サムネイル画像生成")
+
+# 入力項目
+portrait_file = st.file_uploader("人物画像（縦：横 = 3:2）", type=["jpg", "jpeg", "png"])
+landscape_file = st.file_uploader("背景画像（縦：横 = 3:4）", type=["jpg", "jpeg", "png"])
+name = st.text_input("名前")
+location = st.text_input("留学先（国・都市）")
+university = st.text_input("留学先大学")
+period = st.text_input("留学期間")
+affiliation = st.text_input("所属（出発時）")
+
+# トリミング
+cropped_portrait = None
+cropped_landscape = None
+
+if portrait_file:
+    st.subheader("人物画像トリミング（縦：横 = 3:2）")
+    portrait = Image.open(portrait_file)
+    cropped_portrait = st_cropper(
+        portrait,
+        aspect_ratio=(2, 3),
+        realtime_update=True
+    )
+
+if landscape_file:
+    st.subheader("背景画像トリミング（縦：横 = 3:4）")
+    landscape = Image.open(landscape_file)
+    cropped_landscape = st_cropper(
+        landscape,
+        aspect_ratio=(4, 3),
+        realtime_update=True
+    )
+
+if (
+    cropped_portrait is not None
+    and cropped_landscape is not None
+    and all([name, location, university, period, affiliation])
+):
     if st.button("画像を生成"):
-        # 画像読み込みとサイズ調整
-        img1 = Image.open(portrait).convert("RGBA")
-        img2 = Image.open(landscape).convert("RGBA")
-        target_height = min(img1.height, img2.height)
-        img1 = img1.resize((int(img1.width * target_height / img1.height), target_height))
-        img2 = img2.resize((int(img2.width * target_height / img2.height), target_height))
 
-        total_width = img1.width + img2.width
-        canvas = Image.new("RGBA", (total_width, target_height))
-        canvas.paste(img1, (0, 0))
-        canvas.paste(img2, (img1.width, 0))
+        # RGBA変換
+        p_img = cropped_portrait.convert("RGBA")
+        l_img = cropped_landscape.convert("RGBA")
 
-        # 台形サイズ設定
-        bg_width = img2.width
+        # 背景画像の高さに合わせて人物画像を拡大
+        target_height = l_img.height
+        new_pw = int(p_img.width * target_height / p_img.height)
+        p_img = p_img.resize((new_pw, target_height), Image.LANCZOS)
+
+        # 背景画像の横幅を人物画像の2倍にリサイズ
+        new_lw = p_img.width * 2
+        l_img = l_img.resize((new_lw, target_height), Image.LANCZOS)
+
+        # キャンバス作成と貼り付け
+        canvas = Image.new("RGBA", (p_img.width + l_img.width, target_height), (255, 255, 255, 255))
+        canvas.paste(p_img, (0, 0), mask=p_img)
+        canvas.paste(l_img, (p_img.width, 0), mask=l_img)
+
+        # 台形描画（背景側）
+        right = canvas.width
+        bg_width = l_img.width
+        top_margin = int(target_height * 0.15)
+        trapezoid_height = target_height - top_margin
         top_base = int(bg_width * 0.75)
         bottom_base = int(bg_width * 0.95)
-        trapezoid_height = int(target_height * 0.85)
-        top_margin = target_height - trapezoid_height
-        right = total_width
         left_top = right - top_base
         left_bottom = right - bottom_base
-
-        # 台形座標
         trapezoid_coords = [
             (left_top, top_margin),
             (right, top_margin),
             (right, target_height),
-            (left_bottom, target_height)
+            (left_bottom, target_height),
         ]
 
-        # 台形描画（白＋透明度180）
         overlay = Image.new("RGBA", canvas.size, (255, 255, 255, 0))
         draw_overlay = ImageDraw.Draw(overlay)
         draw_overlay.polygon(trapezoid_coords, fill=(255, 255, 255, 180))
-        canvas = Image.alpha_composite(canvas.copy(), overlay)
+        canvas = Image.alpha_composite(canvas, overlay)
 
-        # テキスト構成
+        # テキスト準備
         sections = [
             ("国/都市", location),
             ("留学先", university),
             ("期間", period),
             ("留学開始時所属", affiliation)
         ]
-
         section_count = len(sections)
-        base_lines = 1 + section_count * 2  # 名前1 + セクション2行×n
-        section_gap = 10
+        base_lines = 1 + section_count * 2
         line_spacing_ratio = 0.4
-
-        # 上下に1行分ずつ空けて → 使用可能高さ
-        total_spacing_lines = base_lines + (base_lines - 1) * line_spacing_ratio + section_count  # セクション間10pxは別
-        effective_height = trapezoid_height - 2 * 1  # 1行分ずつ（行間比率でカバー）
-
-        # フォントサイズを逆算
-        base_font_size = int(trapezoid_height / (total_spacing_lines + 2))  # +2: 上下余白分
+        section_gap = 10
+        total_spacing_lines = base_lines + (base_lines - 1) * line_spacing_ratio + section_count
+        base_font_size = int(trapezoid_height / (total_spacing_lines + 2))  # 上下1行分余白
         name_font_size = int(base_font_size * 1.5)
 
         try:
@@ -94,24 +121,18 @@ if portrait and landscape and name and location and university and period and af
             font_base = ImageFont.load_default()
             font_name = ImageFont.load_default()
 
-        # 描画開始位置（上余白 = 1行分）
-        start_y = top_margin + int(base_font_size)
-
-        # 描画処理
         draw = ImageDraw.Draw(canvas)
         text_x = left_top + 40
-        y = start_y
+        y = top_margin + base_font_size  # 上に1行分余白
 
-        # 名前
         draw.text((text_x, y), name, fill=(0, 0, 0, 255), font=font_name)
-        y += int(name_font_size + name_font_size * line_spacing_ratio)
+        y += int(name_font_size * (1 + line_spacing_ratio))
 
-        # セクション
         for title, value in sections:
             draw.text((text_x, y), title, fill=(0, 0, 0, 255), font=font_base)
-            y += int(base_font_size + base_font_size * line_spacing_ratio)
-            draw.text((text_x, y), value, fill=(0, 0, 0, 255), font=font_base)
-            y += int(base_font_size + base_font_size * line_spacing_ratio)
+            y += int(base_font_size * (1 + line_spacing_ratio))
+            draw.text((text_x, y), "\u3000" + value, fill=(0, 0, 0, 255), font=font_base)
+            y += int(base_font_size * (1 + line_spacing_ratio))
             y += section_gap
 
         # 出力
@@ -120,5 +141,5 @@ if portrait and landscape and name and location and university and period and af
         final_img.save(output, format="JPEG")
         output.seek(0)
 
-        st.image(output, caption="完成画像", use_container_width=True)
-        st.download_button("画像をダウンロード", data=output, file_name="poster_output.jpg", mime="image/jpeg")
+        st.image(final_img, caption="完成画像", use_container_width=True)
+        st.download_button("画像をダウンロード", data=output, file_name="thumbnail.jpg", mime="image/jpeg")
