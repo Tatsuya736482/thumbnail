@@ -2,7 +2,7 @@
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-from streamlit_cropper import st_cropper
+from streamlit_cropper import st_cropper # pip install streamlit-cropper"でインストール
 from io import BytesIO
 import os
 import requests
